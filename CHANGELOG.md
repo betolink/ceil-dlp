@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Config-driven custom regex patterns (`custom_patterns`).** Regex patterns can
+  now be added via YAML config instead of being hard-coded in `patterns.py`. The
+  field maps a PII type name to a list of regex patterns: patterns for an existing
+  type (e.g. `api_key`) are merged with the built-in ones, and new keys create brand
+  new PII types (which then need a policy). Threaded through text/image/PDF detection
+  and all redaction paths, with the analyzer cache keyed on the pattern set so
+  per-config analyzers don't collide.
+
 ### Fixed
 
 - **Per-message masking/whistledown silently failed with multiple messages.**

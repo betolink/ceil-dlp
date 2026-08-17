@@ -169,6 +169,7 @@ class CeilDLPHandler(CustomLogger):
                 text_content,
                 enabled_types=self.enabled_types,
                 ner_strength=self.config.ner_strength,
+                custom_patterns=self.config.custom_patterns,
             )
             if text_content
             else {}
@@ -181,7 +182,11 @@ class CeilDLPHandler(CustomLogger):
                 set(self.config.enabled_pii_types) if self.config.enabled_pii_types else None
             )
             for image_data in images:
-                image_detections = detect_pii_in_image(image_data, enabled_types=enabled_types)
+                image_detections = detect_pii_in_image(
+                    image_data,
+                    enabled_types=enabled_types,
+                    custom_patterns=self.config.custom_patterns,
+                )
                 if image_detections:
                     # Track this image and its detections
                     images_with_pii.append((image_data, image_detections))
@@ -198,7 +203,11 @@ class CeilDLPHandler(CustomLogger):
                 set(self.config.enabled_pii_types) if self.config.enabled_pii_types else None
             )
             for pdf_data in pdfs:
-                pdf_detections = detect_pii_in_pdf(pdf_data, enabled_types=enabled_types)
+                pdf_detections = detect_pii_in_pdf(
+                    pdf_data,
+                    enabled_types=enabled_types,
+                    custom_patterns=self.config.custom_patterns,
+                )
                 if pdf_detections:
                     # Track this PDF and its detections
                     pdfs_with_pii.append((pdf_data, pdf_detections))
@@ -352,7 +361,10 @@ class CeilDLPHandler(CustomLogger):
                 # Apply masking for medium-risk PII
                 if masked_types:
                     redacted_text, redacted_items = redact_text(
-                        text_content, detections=masked_types, ner_strength=self.config.ner_strength
+                        text_content,
+                        detections=masked_types,
+                        ner_strength=self.config.ner_strength,
+                        custom_patterns=self.config.custom_patterns,
                     )
 
                     # Update messages with redacted text
@@ -365,7 +377,10 @@ class CeilDLPHandler(CustomLogger):
                         # Determine which PII types in images should be masked
                         image_pii_types_to_mask = set(masked_types.keys())
                         modified_messages = self._redact_images_in_messages(
-                            modified_messages, images_with_pii, image_pii_types_to_mask
+                            modified_messages,
+                            images_with_pii,
+                            image_pii_types_to_mask,
+                            self.config.custom_patterns,
                         )
 
                     # Redact PDFs that have PII detected
@@ -373,7 +388,10 @@ class CeilDLPHandler(CustomLogger):
                         # Determine which PII types in PDFs should be masked
                         pdf_pii_types_to_mask = set(masked_types.keys())
                         modified_messages = self._redact_pdfs_in_messages(
-                            modified_messages, pdfs_with_pii, pdf_pii_types_to_mask
+                            modified_messages,
+                            pdfs_with_pii,
+                            pdf_pii_types_to_mask,
+                            self.config.custom_patterns,
                         )
 
                     data["messages"] = modified_messages
@@ -408,13 +426,19 @@ class CeilDLPHandler(CustomLogger):
                     if images_with_pii:
                         image_pii_types_to_mask = set(whistledown_types.keys())
                         modified_messages = self._redact_images_in_messages(
-                            modified_messages, images_with_pii, image_pii_types_to_mask
+                            modified_messages,
+                            images_with_pii,
+                            image_pii_types_to_mask,
+                            self.config.custom_patterns,
                         )
 
                     if pdfs_with_pii:
                         pdf_pii_types_to_mask = set(whistledown_types.keys())
                         modified_messages = self._redact_pdfs_in_messages(
-                            modified_messages, pdfs_with_pii, pdf_pii_types_to_mask
+                            modified_messages,
+                            pdfs_with_pii,
+                            pdf_pii_types_to_mask,
+                            self.config.custom_patterns,
                         )
 
                     data["messages"] = modified_messages
@@ -684,6 +708,7 @@ class CeilDLPHandler(CustomLogger):
         messages: list[Any],
         images_with_pii: list[tuple[bytes, dict[str, list[tuple[str, int, int]]]]],
         pii_types_to_mask: set[str],
+        custom_patterns: dict[str, list[str]] | None = None,
     ) -> list[Any]:
         """
         Redact images in messages that contain PII types that should be masked.
@@ -692,6 +717,7 @@ class CeilDLPHandler(CustomLogger):
             messages: List of messages (may be modified from text redaction)
             images_with_pii: List of (image_data, image_detections) tuples
             pii_types_to_mask: Set of PII types that should be masked
+            custom_patterns: Optional dict mapping PII type name to list of regex strings.
 
         Returns:
             Modified messages with redacted images
@@ -713,6 +739,7 @@ class CeilDLPHandler(CustomLogger):
                         pii_types=types_to_redact,
                         ocr_strength=self.config.ocr_strength,
                         ner_strength=self.config.ner_strength,
+                        custom_patterns=custom_patterns,
                     )
                     image_redaction_map[image_data] = redacted_image
                     logger.debug(f"Redacted image with PII types: {types_to_redact}")
@@ -817,6 +844,7 @@ class CeilDLPHandler(CustomLogger):
         messages: list[Any],
         pdfs_with_pii: list[tuple[bytes, dict[str, list[tuple[str, int, int]]]]],
         pii_types_to_mask: set[str],
+        custom_patterns: dict[str, list[str]] | None = None,
     ) -> list[Any]:
         """
         Redact PDFs in messages that contain PII types that should be masked.
@@ -825,6 +853,7 @@ class CeilDLPHandler(CustomLogger):
             messages: List of messages (may be modified from text/image redaction)
             pdfs_with_pii: List of (pdf_data, pdf_detections) tuples
             pii_types_to_mask: Set of PII types that should be masked
+            custom_patterns: Optional dict mapping PII type name to list of regex strings.
 
         Returns:
             Modified messages with redacted PDFs
@@ -846,6 +875,7 @@ class CeilDLPHandler(CustomLogger):
                         pii_types=types_to_redact,
                         ocr_strength=self.config.ocr_strength,
                         ner_strength=self.config.ner_strength,
+                        custom_patterns=custom_patterns,
                     )
                     pdf_redaction_map[pdf_data] = redacted_pdf
                     logger.debug(f"Redacted PDF with PII types: {types_to_redact}")

@@ -24,6 +24,7 @@ def detect_pii_in_text(
     text: str,
     enabled_types: set[str] | None = None,
     ner_strength: int = 3,
+    custom_patterns: dict[str, list[str]] | None = None,
 ) -> dict[str, list[PatternMatch]]:
     """
     Detect PII in text using Presidio for standard PII and custom patterns for API keys.
@@ -41,14 +42,25 @@ def detect_pii_in_text(
                      - 2: spaCy + transformer ensemble (balanced)
                      - 3: spaCy + transformer + GLiNER ensemble (best coverage, slower)
                      Defaults to 1 for backward compatibility.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
+                         Patterns for existing types extend the built-in detection;
+                         new keys create new PII types.
 
     Returns:
         Dictionary mapping PII type to list of matches.
     """
-    # Determine which types to detect
-    types_to_detect = ENABLED_TYPES_DEFAULT if enabled_types is None else frozenset(enabled_types)
+    # Custom pattern types are always valid detection types
+    custom_type_names = set(custom_patterns.keys()) if custom_patterns else set()
+    all_valid_types = PRESIDIO_TYPES.union(CUSTOM_TYPES).union(custom_type_names)
 
-    all_types = types_to_detect.intersection(PRESIDIO_TYPES.union(CUSTOM_TYPES))
+    # Determine which types to detect
+    if enabled_types is None:
+        # Default detection includes custom pattern types
+        types_to_detect = ENABLED_TYPES_DEFAULT.union(custom_type_names)
+    else:
+        types_to_detect = frozenset(enabled_types)
+
+    all_types = types_to_detect.intersection(all_valid_types)
 
     if not all_types:
         return {}
@@ -56,5 +68,8 @@ def detect_pii_in_text(
     # Use ensemble detection (handles merging when ner_strength=2)
     # detect_with_presidio_ensemble already filters by enabled_types, including custom types
     return detect_with_presidio_ensemble(
-        text, ner_strength=ner_strength, enabled_types=set(all_types)
+        text,
+        ner_strength=ner_strength,
+        enabled_types=set(all_types),
+        custom_patterns=custom_patterns,
     )

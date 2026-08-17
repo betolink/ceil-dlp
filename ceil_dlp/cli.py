@@ -419,18 +419,25 @@ def test(
         text_content = input_file.read_text(encoding="utf-8", errors="ignore")
         file_content = text_content
         detections = detect_pii_in_text(
-            text_content, enabled_types=enabled_types, ner_strength=config.ner_strength
+            text_content,
+            enabled_types=enabled_types,
+            ner_strength=config.ner_strength,
+            custom_patterns=config.custom_patterns,
         )
     elif is_image:
         # Read image file
         image_bytes = input_file.read_bytes()
         file_content = image_bytes
-        detections = detect_pii_in_image(image_bytes, enabled_types=enabled_types)
+        detections = detect_pii_in_image(
+            image_bytes, enabled_types=enabled_types, custom_patterns=config.custom_patterns
+        )
     elif is_pdf:
         # Read PDF file
         pdf_bytes = input_file.read_bytes()
         file_content = pdf_bytes
-        detections = detect_pii_in_pdf(pdf_bytes, enabled_types=enabled_types)
+        detections = detect_pii_in_pdf(
+            pdf_bytes, enabled_types=enabled_types, custom_patterns=config.custom_patterns
+        )
 
     # Process detections based on policies
     blocked_types = []
@@ -491,7 +498,10 @@ def test(
         # Show redacted version
         if is_text and text_content:
             redacted_text, redacted_items = redact_text(
-                text_content, detections=masked_types, ner_strength=config.ner_strength
+                text_content,
+                detections=masked_types,
+                ner_strength=config.ner_strength,
+                custom_patterns=config.custom_patterns,
             )
             console.print(Panel.fit("[bold yellow]MASKED[/bold yellow]", border_style="yellow"))
             console.print("\n[bold]Original:[/bold]")
@@ -510,6 +520,7 @@ def test(
                     pii_types=types_to_redact,
                     ocr_strength=config.ocr_strength,
                     ner_strength=config.ner_strength,
+                    custom_patterns=config.custom_patterns,
                 )
                 if output_file:
                     output_file.write_bytes(redacted_image)
@@ -528,6 +539,7 @@ def test(
                     pii_types=types_to_redact,
                     ocr_strength=config.ocr_strength,
                     ner_strength=config.ner_strength,
+                    custom_patterns=config.custom_patterns,
                 )
                 if output_file:
                     output_file.write_bytes(redacted_pdf)

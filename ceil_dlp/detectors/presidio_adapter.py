@@ -3,7 +3,6 @@
 import logging
 import os
 from functools import lru_cache
-from typing import cast
 
 # Set transformers verbosity BEFORE importing anything that might use transformers
 # This suppresses the "Some weights were not used" warning which is expected when loading
@@ -14,7 +13,7 @@ os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
 
 from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer, RecognizerRegistry
 
-from ceil_dlp.detectors.patterns import PatternMatch, PatternType
+from ceil_dlp.detectors.patterns import PatternMatch
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +89,37 @@ PRESIDIO_TO_PII_TYPE: dict[str, str] = {
 }
 
 
-@lru_cache(maxsize=1)
-def get_pii_type_to_entities() -> dict[str, list[str]]:
-    """Get mapping of PII type to Presidio entity names."""
-    return {v: [k] for k, v in PRESIDIO_TO_PII_TYPE.items()}
+def get_pii_type_to_entities(custom_patterns: dict[str, list[str]] | None = None) -> dict[str, list[str]]:
+    """Get mapping of PII type to Presidio entity names.
+
+    Includes any custom pattern types so image/PDF redaction can map them.
+    """
+    mapping = {v: [k] for k, v in PRESIDIO_TO_PII_TYPE.items()}
+    if custom_patterns:
+        for pii_type in custom_patterns:
+            mapping[pii_type] = [pii_type.upper()]
+    return mapping
 
 
-def _create_secret_recognizers() -> list[PatternRecognizer]:
+def _custom_patterns_key(custom_patterns: dict[str, list[str]] | None) -> frozenset:
+    """Return a hashable signature for custom patterns (for analyzer caching)."""
+    if not custom_patterns:
+        return frozenset()
+    return frozenset((pii_type, tuple(patterns)) for pii_type, patterns in custom_patterns.items())
+
+
+def _create_secret_recognizers(
+    custom_patterns: dict[str, list[str]] | None = None,
+) -> list[PatternRecognizer]:
     """
     Create Presidio PatternRecognizer objects for custom secrets (API keys, etc.).
+
+    Merges the built-in regex patterns with any config-provided custom patterns.
+    Custom patterns for a known type extend that type's patterns; custom patterns
+    for an unknown type create a brand new PII type.
+
+    Args:
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
 
     Returns:
         List of PatternRecognizer objects
@@ -107,14 +128,19 @@ def _create_secret_recognizers() -> list[PatternRecognizer]:
 
     recognizers = []
 
-    # Custom types that can be represented as regex patterns
-    custom_types = {"api_key", "pem_key", "jwt_token", "database_url", "cloud_credential"}
+    # Merge built-in patterns with custom patterns
+    merged_patterns: dict[str, list[str]] = {
+        str(pattern_type): list(patterns_list)
+        for pattern_type, patterns_list in PATTERNS.items()
+    }
+    if custom_patterns:
+        for pii_type, patterns in custom_patterns.items():
+            merged_patterns.setdefault(pii_type, []).extend(patterns)
 
-    for pattern_type in custom_types:
-        if pattern_type not in PATTERNS:
+    for pattern_type, patterns_list in merged_patterns.items():
+        if not patterns_list:
             continue
 
-        patterns_list = PATTERNS[cast(PatternType, pattern_type)]
         presidio_patterns: list[Pattern] = []
 
         for regex_pattern in patterns_list:
@@ -138,15 +164,33 @@ def _create_secret_recognizers() -> list[PatternRecognizer]:
     return recognizers
 
 
-@lru_cache(maxsize=3)  # Cache up to 3 analyzers (one per strength level: 1, 2, or 3)
-def _get_analyzer_cached(ner_strength: int) -> AnalyzerEngine:
+def _get_entity_to_pii_type(
+    custom_patterns: dict[str, list[str]] | None = None,
+) -> dict[str, str]:
+    """Build the Presidio entity -> PII type mapping, including custom pattern types."""
+    mapping = dict(PRESIDIO_TO_PII_TYPE)
+    if custom_patterns:
+        for pii_type in custom_patterns:
+            mapping[pii_type.upper()] = pii_type
+    return mapping
+
+
+@lru_cache(maxsize=12)  # Cache analyzers per (strength, custom-patterns signature)
+def _get_analyzer_cached(ner_strength: int, custom_patterns_key: frozenset) -> AnalyzerEngine:
     """Internal cached function - ner_strength must be 1, 2, or 3."""
+    # Rebuild custom patterns dict from the hashable key
+    custom_patterns: dict[str, list[str]] | None = (
+        {pii_type: list(patterns) for pii_type, patterns in custom_patterns_key}
+        if custom_patterns_key
+        else None
+    )
+
     # Create registry with built-in recognizers
     registry = RecognizerRegistry()
     registry.load_predefined_recognizers()
 
-    # Add custom secret recognizers
-    secret_recognizers = _create_secret_recognizers()
+    # Add custom secret recognizers (built-in + config-provided patterns)
+    secret_recognizers = _create_secret_recognizers(custom_patterns)
     for recognizer in secret_recognizers:
         registry.add_recognizer(recognizer)
 
@@ -280,7 +324,10 @@ def _get_analyzer_cached(ner_strength: int) -> AnalyzerEngine:
             return AnalyzerEngine(registry=registry)
 
 
-def get_analyzer(ner_strength: int = 1) -> AnalyzerEngine:
+def get_analyzer(
+    ner_strength: int = 1,
+    custom_patterns: dict[str, list[str]] | None = None,
+) -> AnalyzerEngine:
     """Get cached AnalyzerEngine instance with custom secret recognizers.
 
     Args:
@@ -289,6 +336,8 @@ def get_analyzer(ner_strength: int = 1) -> AnalyzerEngine:
                      - 2: transformer-based NER (dslim/bert-base-NER)
                      - 3: GLiNER zero-shot NER (best for long texts and hyphenated names)
                      Defaults to 1 for backward compatibility.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
+                         These are merged with the built-in secret patterns.
 
     Returns:
         AnalyzerEngine configured with the specified NER model strength.
@@ -303,16 +352,21 @@ def get_analyzer(ner_strength: int = 1) -> AnalyzerEngine:
             f"ner_strength must be 1, 2, or 3, got {ner_strength}. "
             "Use 1 for en_core_web_lg, 2 for transformer-based NER, or 3 for GLiNER."
         )
-    return _get_analyzer_cached(ner_strength)
+    return _get_analyzer_cached(ner_strength, _custom_patterns_key(custom_patterns))
 
 
-def _detect_with_presidio(text: str, ner_strength: int = 1) -> dict[str, list[PatternMatch]]:
-    analyzer = get_analyzer(ner_strength=ner_strength)
+def _detect_with_presidio(
+    text: str,
+    ner_strength: int = 1,
+    custom_patterns: dict[str, list[str]] | None = None,
+) -> dict[str, list[PatternMatch]]:
+    analyzer = get_analyzer(ner_strength=ner_strength, custom_patterns=custom_patterns)
     results = analyzer.analyze(text=text, language="en")
+    entity_to_pii_type = _get_entity_to_pii_type(custom_patterns)
     detections: dict[str, list[PatternMatch]] = {}
     for result in results:
         entity_type = result.entity_type
-        pii_type = PRESIDIO_TO_PII_TYPE.get(entity_type)
+        pii_type = entity_to_pii_type.get(entity_type)
         if pii_type:
             matched_text = text[result.start : result.end]
             match = (matched_text, result.start, result.end)
@@ -326,6 +380,7 @@ def detect_with_presidio_ensemble(
     text: str,
     ner_strength: int = 1,
     enabled_types: set[str] | frozenset[str] | None = None,
+    custom_patterns: dict[str, list[str]] | None = None,
 ) -> dict[str, list[PatternMatch]]:
     """
     Detect PII using Presidio with optional ensemble approach (merging multiple NER models).
@@ -342,6 +397,8 @@ def detect_with_presidio_ensemble(
                      - 3: spaCy + transformer + GLiNER ensemble (best coverage, slower)
                      Defaults to 1 for backward compatibility.
         enabled_types: Optional set of PII types to filter results. If None, returns all detected types.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
+                         These are merged with the built-in secret patterns.
 
     Returns:
         Dictionary mapping PII type to list of matches.
@@ -367,18 +424,30 @@ def detect_with_presidio_ensemble(
     # after redaction, but for text, redaction replaces content making it undetectable.
     if ner_strength_val == 2:
         # Two-model ensemble: spaCy + transformer
-        detections_spacy = _detect_with_presidio(text, ner_strength=1)
-        detections_transformer = _detect_with_presidio(text, ner_strength=2)
+        detections_spacy = _detect_with_presidio(
+            text, ner_strength=1, custom_patterns=custom_patterns
+        )
+        detections_transformer = _detect_with_presidio(
+            text, ner_strength=2, custom_patterns=custom_patterns
+        )
         detections_list = [detections_spacy, detections_transformer]
     elif ner_strength_val == 3:
         # Three-model ensemble: spaCy + transformer + GLiNER
-        detections_spacy = _detect_with_presidio(text, ner_strength=1)
-        detections_transformer = _detect_with_presidio(text, ner_strength=2)
-        detections_gliner = _detect_with_presidio(text, ner_strength=3)
+        detections_spacy = _detect_with_presidio(
+            text, ner_strength=1, custom_patterns=custom_patterns
+        )
+        detections_transformer = _detect_with_presidio(
+            text, ner_strength=2, custom_patterns=custom_patterns
+        )
+        detections_gliner = _detect_with_presidio(
+            text, ner_strength=3, custom_patterns=custom_patterns
+        )
         detections_list = [detections_spacy, detections_transformer, detections_gliner]
     else:
         # Single model detection
-        detections = _detect_with_presidio(text, ner_strength=ner_strength_val)
+        detections = _detect_with_presidio(
+            text, ner_strength=ner_strength_val, custom_patterns=custom_patterns
+        )
         if enabled_types:
             detections = {k: v for k, v in detections.items() if k in enabled_types}
         return detections
@@ -412,7 +481,11 @@ def detect_with_presidio_ensemble(
     return merged_detections
 
 
-def detect_with_presidio(text: str, ner_strength: int = 1) -> dict[str, list[PatternMatch]]:
+def detect_with_presidio(
+    text: str,
+    ner_strength: int = 1,
+    custom_patterns: dict[str, list[str]] | None = None,
+) -> dict[str, list[PatternMatch]]:
     """
     Detect standard PII using Presidio.
 
@@ -423,12 +496,15 @@ def detect_with_presidio(text: str, ner_strength: int = 1) -> dict[str, list[Pat
                      - 2: spaCy + transformer ensemble (balanced)
                      - 3: spaCy + transformer + GLiNER ensemble (best coverage, slower)
                      Defaults to 1 for backward compatibility.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
 
     Returns:
         Dictionary mapping PII type to list of matches.
         Each match is a tuple: (matched_text, start_pos, end_pos)
     """
     try:
-        return _detect_with_presidio(text, ner_strength=ner_strength)
+        return _detect_with_presidio(
+            text, ner_strength=ner_strength, custom_patterns=custom_patterns
+        )
     except Exception as e:
         raise RuntimeError("Failed to detect PII with Presidio") from e

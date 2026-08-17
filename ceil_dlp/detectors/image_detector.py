@@ -9,14 +9,18 @@ from presidio_image_redactor import ImageAnalyzerEngine
 
 from ceil_dlp.detectors.doctr_ocr import get_doctr_heavy_ocr_engine, get_doctr_ocr_engine
 from ceil_dlp.detectors.patterns import PatternMatch
-from ceil_dlp.detectors.presidio_adapter import PRESIDIO_TO_PII_TYPE, get_analyzer
+from ceil_dlp.detectors.presidio_adapter import (
+    PRESIDIO_TO_PII_TYPE,
+    _custom_patterns_key,
+    get_analyzer,
+)
 from ceil_dlp.utils import image_to_pil_image
 
 logger = logging.getLogger(__name__)
 
 
-@lru_cache(maxsize=3)  # Cache up to 3 analyzers (one per strength level: 1, 2, or 3)
-def get_image_analyzer(ner_strength: int = 1) -> ImageAnalyzerEngine:
+@lru_cache(maxsize=12)  # Cache analyzers per (strength, custom-patterns signature)
+def _get_image_analyzer_cached(ner_strength: int, custom_patterns_key: frozenset) -> ImageAnalyzerEngine:
     """
     Get cached ImageAnalyzerEngine instance with docTR OCR engine.
 
@@ -28,6 +32,7 @@ def get_image_analyzer(ner_strength: int = 1) -> ImageAnalyzerEngine:
                      - 2: transformer-based NER (dslim/bert-base-NER)
                      - 3: GLiNER zero-shot NER (best for long texts and hyphenated names)
                      Defaults to 1 for backward compatibility.
+        custom_patterns_key: Hashable signature of custom patterns.
 
     Returns:
         ImageAnalyzerEngine configured with the specified NER model strength.
@@ -40,14 +45,37 @@ def get_image_analyzer(ner_strength: int = 1) -> ImageAnalyzerEngine:
             f"ner_strength must be 1, 2, or 3, got {ner_strength}. "
             "Use 1 for en_core_web_lg, 2 for transformer-based NER, or 3 for GLiNER."
         )
-    analyzer = get_analyzer(ner_strength=ner_strength)
+    custom_patterns = (
+        {pii_type: list(patterns) for pii_type, patterns in custom_patterns_key}
+        if custom_patterns_key
+        else None
+    )
+    analyzer = get_analyzer(ner_strength=ner_strength, custom_patterns=custom_patterns)
     # Use docTR OCR engine (lighter model for ensemble approach)
     ocr_engine = get_doctr_ocr_engine()
     return ImageAnalyzerEngine(analyzer_engine=analyzer, ocr=ocr_engine)
 
 
-@lru_cache(maxsize=3)  # Cache up to 3 analyzers (one per strength level: 1, 2, or 3)
-def get_tesseract_image_analyzer(ner_strength: int = 1) -> ImageAnalyzerEngine:
+def get_image_analyzer(
+    ner_strength: int = 1,
+    custom_patterns: dict[str, list[str]] | None = None,
+) -> ImageAnalyzerEngine:
+    """Get cached ImageAnalyzerEngine instance with docTR OCR engine.
+
+    Args:
+        ner_strength: NER model strength (1, 2, or 3). Defaults to 1.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
+
+    Returns:
+        ImageAnalyzerEngine configured with the specified NER model strength.
+    """
+    return _get_image_analyzer_cached(ner_strength, _custom_patterns_key(custom_patterns))
+
+
+@lru_cache(maxsize=12)  # Cache analyzers per (strength, custom-patterns signature)
+def _get_tesseract_image_analyzer_cached(
+    ner_strength: int, custom_patterns_key: frozenset
+) -> ImageAnalyzerEngine:
     """
     Get cached ImageAnalyzerEngine instance with Tesseract OCR engine.
 
@@ -59,6 +87,7 @@ def get_tesseract_image_analyzer(ner_strength: int = 1) -> ImageAnalyzerEngine:
                      - 2: transformer-based NER (dslim/bert-base-NER)
                      - 3: GLiNER zero-shot NER (best for long texts and hyphenated names)
                      Defaults to 1 for backward compatibility.
+        custom_patterns_key: Hashable signature of custom patterns.
 
     Returns:
         ImageAnalyzerEngine configured with the specified NER model strength.
@@ -71,13 +100,36 @@ def get_tesseract_image_analyzer(ner_strength: int = 1) -> ImageAnalyzerEngine:
             f"ner_strength must be 1, 2, or 3, got {ner_strength}. "
             "Use 1 for en_core_web_lg, 2 for transformer-based NER, or 3 for GLiNER."
         )
-    analyzer = get_analyzer(ner_strength=ner_strength)
+    custom_patterns = (
+        {pii_type: list(patterns) for pii_type, patterns in custom_patterns_key}
+        if custom_patterns_key
+        else None
+    )
+    analyzer = get_analyzer(ner_strength=ner_strength, custom_patterns=custom_patterns)
     # Use default Tesseract OCR (no custom OCR engine = uses Tesseract)
     return ImageAnalyzerEngine(analyzer_engine=analyzer)
 
 
-@lru_cache(maxsize=3)  # Cache up to 3 analyzers (one per strength level: 1, 2, or 3)
-def get_doctr_heavy_image_analyzer(ner_strength: int = 1) -> ImageAnalyzerEngine:
+def get_tesseract_image_analyzer(
+    ner_strength: int = 1,
+    custom_patterns: dict[str, list[str]] | None = None,
+) -> ImageAnalyzerEngine:
+    """Get cached ImageAnalyzerEngine instance with Tesseract OCR engine.
+
+    Args:
+        ner_strength: NER model strength (1, 2, or 3). Defaults to 1.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
+
+    Returns:
+        ImageAnalyzerEngine configured with the specified NER model strength.
+    """
+    return _get_tesseract_image_analyzer_cached(ner_strength, _custom_patterns_key(custom_patterns))
+
+
+@lru_cache(maxsize=12)  # Cache analyzers per (strength, custom-patterns signature)
+def _get_doctr_heavy_image_analyzer_cached(
+    ner_strength: int, custom_patterns_key: frozenset
+) -> ImageAnalyzerEngine:
     """
     Get cached ImageAnalyzerEngine instance with heavy docTR OCR engine.
 
@@ -89,6 +141,7 @@ def get_doctr_heavy_image_analyzer(ner_strength: int = 1) -> ImageAnalyzerEngine
                      - 2: transformer-based NER (dslim/bert-base-NER)
                      - 3: GLiNER zero-shot NER (best for long texts and hyphenated names)
                      Defaults to 1 for backward compatibility.
+        custom_patterns_key: Hashable signature of custom patterns.
 
     Returns:
         ImageAnalyzerEngine configured with the specified NER model strength.
@@ -101,14 +154,39 @@ def get_doctr_heavy_image_analyzer(ner_strength: int = 1) -> ImageAnalyzerEngine
             f"ner_strength must be 1, 2, or 3, got {ner_strength}. "
             "Use 1 for en_core_web_lg, 2 for transformer-based NER, or 3 for GLiNER."
         )
-    analyzer = get_analyzer(ner_strength=ner_strength)
+    custom_patterns = (
+        {pii_type: list(patterns) for pii_type, patterns in custom_patterns_key}
+        if custom_patterns_key
+        else None
+    )
+    analyzer = get_analyzer(ner_strength=ner_strength, custom_patterns=custom_patterns)
     # Use heavier docTR OCR engine for third pass
     ocr_engine = get_doctr_heavy_ocr_engine()
     return ImageAnalyzerEngine(analyzer_engine=analyzer, ocr=ocr_engine)
 
 
+def get_doctr_heavy_image_analyzer(
+    ner_strength: int = 1,
+    custom_patterns: dict[str, list[str]] | None = None,
+) -> ImageAnalyzerEngine:
+    """Get cached ImageAnalyzerEngine instance with heavy docTR OCR engine.
+
+    Args:
+        ner_strength: NER model strength (1, 2, or 3). Defaults to 1.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
+
+    Returns:
+        ImageAnalyzerEngine configured with the specified NER model strength.
+    """
+    return _get_doctr_heavy_image_analyzer_cached(
+        ner_strength, _custom_patterns_key(custom_patterns)
+    )
+
+
 def detect_pii_in_image(
-    image_data: bytes | str | Path | Image.Image, enabled_types: set[str] | None = None
+    image_data: bytes | str | Path | Image.Image,
+    enabled_types: set[str] | None = None,
+    custom_patterns: dict[str, list[str]] | None = None,
 ) -> dict[str, list[PatternMatch]]:
     """
     Detect PII in an image using Presidio Image Redactor and custom pattern detection.
@@ -121,6 +199,7 @@ def detect_pii_in_image(
     Args:
         image_data: Image as bytes, file path (str), Path object, or PIL Image
         enabled_types: Optional set of PII types to detect. If None, detects all types.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
 
     Returns:
         Dictionary mapping PII type to list of matches (same format as text detection).
@@ -132,7 +211,7 @@ def detect_pii_in_image(
 
         # Use Presidio Image Redactor with our configured analyzer
         # This performs OCR and PII detection in one step
-        image_analyzer = get_image_analyzer()
+        image_analyzer = get_image_analyzer(custom_patterns=custom_patterns)
 
         analyzer_results = image_analyzer.analyze(
             image=image,

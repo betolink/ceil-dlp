@@ -26,6 +26,7 @@ def _redact_with_ocr_engine(
     ocr_type: int,
     ner_strength: int,
     entities_to_redact: list[str] | None,
+    custom_patterns: dict[str, list[str]] | None = None,
 ) -> Image.Image:
     """Helper function to redact an image with a specific OCR engine and NER strength.
 
@@ -34,16 +35,21 @@ def _redact_with_ocr_engine(
         ocr_type: OCR engine type (1=docTR, 2=tesseract, 3=heavy docTR)
         ner_strength: NER model strength (1, 2, or 3)
         entities_to_redact: List of Presidio entity types to redact
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
 
     Returns:
         Redacted image
     """
     if ocr_type == 1:
-        analyzer = get_image_analyzer(ner_strength=ner_strength)
+        analyzer = get_image_analyzer(ner_strength=ner_strength, custom_patterns=custom_patterns)
     elif ocr_type == 2:
-        analyzer = get_tesseract_image_analyzer(ner_strength=ner_strength)
+        analyzer = get_tesseract_image_analyzer(
+            ner_strength=ner_strength, custom_patterns=custom_patterns
+        )
     elif ocr_type == 3:
-        analyzer = get_doctr_heavy_image_analyzer(ner_strength=ner_strength)
+        analyzer = get_doctr_heavy_image_analyzer(
+            ner_strength=ner_strength, custom_patterns=custom_patterns
+        )
     else:
         raise ValueError(f"Invalid ocr_type: {ocr_type}. Must be 1, 2, or 3.")
 
@@ -106,6 +112,7 @@ def redact_text(
     detections: dict[str, list[tuple[str, int, int]]] | None = None,
     ner_strength: int | None = None,
     enabled_types: set[str] | None = None,
+    custom_patterns: dict[str, list[str]] | None = None,
 ) -> tuple[str, dict[str, list[str]]]:
     """
     Redact PII in text using NER ensemble approach if enabled.
@@ -123,6 +130,7 @@ def redact_text(
                      - 3: spaCy + transformer + GLiNER ensemble (best coverage, slower)
                      Defaults to 3 if not specified. Only used if detections is None.
         enabled_types: Optional set of PII types to detect. Only used if detections is None.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
 
     Returns:
         Tuple of (redacted_text, redacted_items) where redacted_items maps
@@ -137,7 +145,10 @@ def redact_text(
     # Otherwise, detect PII first using ensemble detection
     ner_strength_val = ner_strength if ner_strength is not None else 3
     detections = detect_with_presidio_ensemble(
-        text, ner_strength=ner_strength_val, enabled_types=enabled_types
+        text,
+        ner_strength=ner_strength_val,
+        enabled_types=enabled_types,
+        custom_patterns=custom_patterns,
     )
 
     return _apply_redaction_to_text(text, detections)
@@ -148,6 +159,7 @@ def redact_image(
     pii_types: list[str] | None = None,
     ocr_strength: int = 1,
     ner_strength: int = 1,
+    custom_patterns: dict[str, list[str]] | None = None,
 ) -> bytes:
     """
     Redact PII in an image using ensemble approach for both OCR and NER.
@@ -173,6 +185,7 @@ def redact_image(
                      - 2: spaCy + transformer ensemble (balanced)
                      - 3: spaCy + transformer + GLiNER ensemble (best coverage, slower)
                      Defaults to 3 if not specified (uses full ensemble for best accuracy).
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
 
     Returns:
         Redacted image as bytes (same format as input)
@@ -201,7 +214,7 @@ def redact_image(
     try:
         # Convert our PII type names to Presidio entity names
         # Create reverse mapping: pii_type -> list of Presidio entity names
-        pii_type_to_entities = get_pii_type_to_entities()
+        pii_type_to_entities = get_pii_type_to_entities(custom_patterns)
 
         entities_to_redact: list[str] = []
         for pii_type in pii_types if pii_types else []:
@@ -221,6 +234,7 @@ def redact_image(
                     ocr_type=ocr_step,
                     ner_strength=ner_model,
                     entities_to_redact=entities_to_redact,
+                    custom_patterns=custom_patterns,
                 )
 
         final_redacted_image_pil: Image.Image = redacted_image_pil
@@ -241,6 +255,7 @@ def redact_pdf(
     pii_types: list[str] | None = None,
     ocr_strength: int = 1,
     ner_strength: int = 1,
+    custom_patterns: dict[str, list[str]] | None = None,
 ) -> bytes:
     """
     Redact PII in a PDF by overlaying black rectangles over detected PII areas.
@@ -258,6 +273,7 @@ def redact_pdf(
                      Defaults to 3 if not specified.
         ner_strength: NER model strength (1=en_core_web_lg, 2=en_core_web_trf, 3=transformer-based).
                      Defaults to 1 if not specified.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
 
     Returns:
         Redacted PDF as bytes
@@ -273,7 +289,9 @@ def redact_pdf(
 
         # Detect PII in PDF
         enabled_types = set(pii_types) if pii_types else None
-        detections = detect_pii_in_pdf(pdf_data, enabled_types=enabled_types)
+        detections = detect_pii_in_pdf(
+            pdf_data, enabled_types=enabled_types, custom_patterns=custom_patterns
+        )
 
         if not detections:
             # No PII detected, return original
@@ -310,6 +328,7 @@ def redact_pdf(
                     pii_types=pii_types,
                     ocr_strength=ocr_strength,
                     ner_strength=ner_strength,
+                    custom_patterns=custom_patterns,
                 )
                 redacted_image = Image.open(io.BytesIO(redacted_image_bytes))
 

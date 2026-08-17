@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 def detect_pii_in_pdf(
-    pdf_data: bytes | str | Path, enabled_types: set[str] | None = None
+    pdf_data: bytes | str | Path,
+    enabled_types: set[str] | None = None,
+    custom_patterns: dict[str, list[str]] | None = None,
 ) -> dict[str, list[PatternMatch]]:
     """
     Detect PII in a PDF by extracting text and images, then running detection on both.
@@ -27,6 +29,7 @@ def detect_pii_in_pdf(
     Args:
         pdf_data: PDF as bytes, file path (str), or Path object
         enabled_types: Optional set of PII types to detect. If None, detects all types.
+        custom_patterns: Optional dict mapping PII type name to list of regex strings.
 
     Returns:
         Dictionary mapping PII type to list of matches (same format as text detection).
@@ -54,7 +57,9 @@ def detect_pii_in_pdf(
                 page_text = textpage.get_text_bounded()
                 if page_text and page_text.strip():
                     # Detect PII in extracted text
-                    text_detections = detect_pii_in_text(page_text, enabled_types=enabled_types)
+                    text_detections = detect_pii_in_text(
+                        page_text, enabled_types=enabled_types, custom_patterns=custom_patterns
+                    )
                     # Merge results (use page offset to track positions if needed)
                     for pii_type, matches in text_detections.items():
                         if pii_type not in results:
@@ -70,7 +75,9 @@ def detect_pii_in_pdf(
                     pil_image = bitmap.to_pil()
 
                     # Detect PII in rendered page image
-                    image_detections = detect_pii_in_image(pil_image, enabled_types=enabled_types)
+                    image_detections = detect_pii_in_image(
+                        pil_image, enabled_types=enabled_types, custom_patterns=custom_patterns
+                    )
                     # Merge image detection results with text detection results
                     for pii_type, matches in image_detections.items():
                         if pii_type not in results:

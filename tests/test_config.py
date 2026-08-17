@@ -267,3 +267,37 @@ def test_config_model_aware_policy_from_dict():
     assert email_policy.models is not None
     assert email_policy.models.allow == ["self-hosted/.*"]
     assert email_policy.models.block is None
+
+
+def test_config_custom_patterns_default():
+    """Test that custom_patterns defaults to empty dict."""
+    config = Config()
+    assert config.custom_patterns == {}
+
+
+def test_config_custom_patterns_from_dict():
+    """Test creating custom_patterns from dict."""
+    config = Config.from_dict(
+        {
+            "custom_patterns": {
+                "api_key": [r"\bAPI\s*[:=]\s*[A-Za-z0-9._-]{10,}\b"],
+                "custom_license": [r"\bLICENSE-NO\s*:\s*[A-Z0-9]{8,}\b"],
+            }
+        }
+    )
+    assert config.custom_patterns["api_key"] == [r"\bAPI\s*[:=]\s*[A-Za-z0-9._-]{10,}\b"]
+    assert config.custom_patterns["custom_license"] == [r"\bLICENSE-NO\s*:\s*[A-Z0-9]{8,}\b"]
+
+
+def test_config_custom_patterns_from_yaml(tmp_path):
+    """Test loading custom_patterns from YAML."""
+    config_file = tmp_path / "config.yaml"
+    config_data = {
+        "custom_patterns": {
+            "api_key": [r"\bAPI\s*[:=]\s*[A-Za-z0-9._-]{10,}\b"],
+        }
+    }
+    config_file.write_text(yaml.dump(config_data))
+
+    config = Config.from_yaml(config_file)
+    assert config.custom_patterns["api_key"] == [r"\bAPI\s*[:=]\s*[A-Za-z0-9._-]{10,}\b"]

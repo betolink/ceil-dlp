@@ -161,6 +161,20 @@ policies:
 #   - pem_key
 #   - jwt_token
 
+# Custom regex patterns (optional)
+# Adds regex patterns for PII detection without hard-coding them in the library.
+# Maps a PII type name to a list of regex patterns:
+# - If the type already exists (e.g., api_key), the patterns are merged with the built-in ones.
+# - If the type is new, a brand new PII type is created (add a policy for it below).
+# The regex is applied to the raw text; the whole match is redacted/replaced.
+# custom_patterns:
+#   # Catch "API: <token>" style values that the built-in api_key patterns miss
+#   api_key:
+#     - "\\bAPI\\s*[:=]\\s*[A-Za-z0-9._-]{10,}\\b"
+#   # Create an entirely new PII type
+#   custom_license:
+#     - "\\bLICENSE-NO\\s*:\\s*[A-Z0-9]{8,}\\b"
+
 # Model matching patterns
 # Patterns support regex matching:
 # - "ollama/qwen3:0.6b" - exact match

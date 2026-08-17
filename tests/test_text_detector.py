@@ -216,3 +216,50 @@ def test_enabled_types_with_new_presidio_types():
     assert "person" in detections or "location" in detections
     # Should not detect email (not in enabled_types)
     assert "email" not in detections
+
+
+def test_custom_pattern_extends_existing_type():
+    """Test that custom patterns extend detection for an existing PII type."""
+    text = "API: ejy2334355.sdgtr"
+    custom_patterns = {
+        "api_key": [r"\bAPI\s*[:=]\s*[A-Za-z0-9._-]{10,}\b"],
+    }
+    detections = detect_pii_in_text(text, ner_strength=1, custom_patterns=custom_patterns)
+    assert "api_key" in detections
+    assert any("ejy2334355.sdgtr" in match[0] for match in detections["api_key"])
+
+
+def test_custom_pattern_creates_new_type():
+    """Test that a custom pattern key can create a brand new PII type."""
+    text = "LICENSE-NO: ABC12345XY"
+    custom_patterns = {
+        "custom_license": [r"\bLICENSE-NO\s*:\s*[A-Z0-9]{8,}\b"],
+    }
+    detections = detect_pii_in_text(text, ner_strength=1, custom_patterns=custom_patterns)
+    assert "custom_license" in detections
+    assert len(detections["custom_license"]) > 0
+
+
+def test_custom_pattern_not_detected_without_config():
+    """Test that a value only matched by a custom pattern isn't detected without it.
+
+    Pins ner_strength=1 because the GLiNER model (strength 3) over-detects and
+    would catch this value anyway, masking the effect of the custom pattern.
+    """
+    text = "API: ejy2334355.sdgtr"
+    detections = detect_pii_in_text(text, ner_strength=1)
+    assert "api_key" not in detections
+
+
+def test_custom_pattern_respects_enabled_types():
+    """Test that custom pattern types are filtered by enabled_types."""
+    text = "LICENSE-NO: ABC12345XY and API: ejy2334355.sdgtr"
+    custom_patterns = {
+        "custom_license": [r"\bLICENSE-NO\s*:\s*[A-Z0-9]{8,}\b"],
+        "api_key": [r"\bAPI\s*[:=]\s*[A-Za-z0-9._-]{10,}\b"],
+    }
+    detections = detect_pii_in_text(
+        text, enabled_types={"custom_license"}, ner_strength=1, custom_patterns=custom_patterns
+    )
+    assert "custom_license" in detections
+    assert "api_key" not in detections

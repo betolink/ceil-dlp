@@ -37,6 +37,14 @@ class Config(BaseModel):
         description="Default policy to apply to any PII type that doesn't have an explicit policy. "
         "If None, defaults to masking all detected PII.",
     )
+    custom_patterns: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Custom regex patterns keyed by PII type. Each value is a list of "
+        "regex patterns to add for that PII type. Patterns are merged with the "
+        "built-in patterns for the same type (or create a new type if the key "
+        "doesn't exist). The matched value is redacted/replaced wholesale. "
+        "Example: {'my_api_key': [r'\\bAPI\\s*[:=]\\s*[A-Za-z0-9._-]{12,}\\b']}",
+    )
     ocr_strength: int = Field(
         default=3,
         ge=1,

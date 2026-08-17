@@ -1357,6 +1357,60 @@ def test_middleware_process_pii_detection_with_pdf():
     assert "email" in pdfs_with_pii[0][1]
 
 
+def test_middleware_process_pii_detection_with_custom_patterns():
+    """Test _process_pii_detection uses config custom patterns."""
+    config = Config(
+        custom_patterns={
+            "api_key": [r"\bAPI\s*[:=]\s*[A-Za-z0-9._-]{10,}\b"],
+        },
+        ner_strength=1,
+    )
+    handler = CeilDLPHandler(config=config)
+    messages = [{"role": "user", "content": "Repeat back this exact string: API: ejy2334355.sdgtr"}]
+
+    (
+        detections,
+        blocked_types,
+        masked_types,
+        whistledown_types,
+        text_content,
+        images_with_pii,
+        pdfs_with_pii,
+    ) = handler._process_pii_detection(messages, "gpt-4")
+
+    assert "api_key" in detections
+    assert any("ejy2334355.sdgtr" in match[0] for match in detections["api_key"])
+    assert text_content == "Repeat back this exact string: API: ejy2334355.sdgtr"
+
+
+def test_middleware_process_pii_detection_with_custom_patterns_new_type():
+    """Test _process_pii_detection detects a brand new custom pattern type."""
+    config = Config(
+        policies={
+            "custom_license": Policy(action="block", enabled=True),
+        },
+        custom_patterns={
+            "custom_license": [r"\bLICENSE-NO\s*:\s*[A-Z0-9]{8,}\b"],
+        },
+        ner_strength=1,
+    )
+    handler = CeilDLPHandler(config=config)
+    messages = [{"role": "user", "content": "LICENSE-NO: ABC12345XY"}]
+
+    (
+        detections,
+        blocked_types,
+        masked_types,
+        whistledown_types,
+        _text_content,
+        _images_with_pii,
+        _pdfs_with_pii,
+    ) = handler._process_pii_detection(messages, "gpt-4")
+
+    assert "custom_license" in detections
+    assert "custom_license" in blocked_types
+
+
 def test_middleware_extract_pdfs_from_messages_string_file_data():
     """Test PDF extraction with string file data."""
     import base64

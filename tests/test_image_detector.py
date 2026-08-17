@@ -121,6 +121,20 @@ def test_detect_pii_in_image_with_api_key():
         assert "api_key" in detections or len(detections) > 0
 
 
+def test_detect_pii_in_image_with_custom_pattern():
+    """Test image detection with a config-provided custom pattern."""
+    text = "LICENSE-NO: ABC12345XY"
+    img_bytes = create_image_with_text(text, width=1000)
+    custom_patterns = {
+        "custom_license": [r"\bLICENSE-NO\s*:\s*[A-Z0-9]{8,}\b"],
+    }
+
+    detections = detect_pii_in_image(img_bytes, custom_patterns=custom_patterns)
+    assert isinstance(detections, dict)
+    if detections:
+        assert "custom_license" in detections
+
+
 def test_detect_pii_in_image_invalid_type():
     """Test image detection with invalid image_data type."""
     # Test with invalid type (not str, Path, or bytes)

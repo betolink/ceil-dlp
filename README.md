@@ -68,6 +68,8 @@ This will remove the callback from your LiteLLM config. You can also use `--remo
 
 - See the [Quick Start Guide](docs/ollama_guide.md) for a comprehensive, step-by-step tutorial with Ollama
 - Take a look at the [example configuration file](config.example.yaml) for all available options
+- See [LiteLLM Integration Fixes](docs/litellm_integration_fixes.md) for known LiteLLM proxy integration bugs and their fixes (streaming reversal, per-message transforms, spend-log hygiene)
+- See [CHANGELOG.md](CHANGELOG.md) for the version history
 
 ## About
 

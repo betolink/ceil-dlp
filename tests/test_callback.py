@@ -9,7 +9,10 @@ from ceil_dlp.middleware import CeilDLPHandler
 def test_callback_module_default_handler():
     """Test that callback module exports a handler instance."""
     assert proxy_handler_instance is not None
-    assert isinstance(proxy_handler_instance, CeilDLPHandler)
+    assert isinstance(proxy_handler_instance._inner, CeilDLPHandler)
+    assert isinstance(proxy_handler_instance, CeilDLPHandler) or hasattr(
+        proxy_handler_instance, "async_pre_call_hook"
+    )
 
 
 def test_callback_module_with_config_path(tmp_path, monkeypatch):
@@ -30,8 +33,9 @@ def test_callback_module_with_config_path(tmp_path, monkeypatch):
 
     # Check that handler was created with config
     handler = ceil_dlp.ceil_dlp_callback.proxy_handler_instance
-    assert handler.config.mode == "observe"
-    email_policy = handler.config.get_policy("email")
+    inner = handler._inner
+    assert inner.config.mode == "observe"
+    email_policy = inner.config.get_policy("email")
     assert email_policy is not None
     assert email_policy.action == "mask"
 
@@ -52,9 +56,9 @@ def test_callback_module_with_invalid_config_path(monkeypatch):
 
     # Should fall back to default handler
     handler = ceil_dlp.ceil_dlp_callback.proxy_handler_instance
-    assert isinstance(handler, CeilDLPHandler)
+    assert isinstance(handler._inner, CeilDLPHandler)
     # Should use default config (enforce mode)
-    assert handler.config.mode == "enforce"
+    assert handler._inner.config.mode == "enforce"
 
     # Clean up
     monkeypatch.delenv("CEIL_DLP_CONFIG_PATH", raising=False)

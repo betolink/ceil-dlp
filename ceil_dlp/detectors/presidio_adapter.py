@@ -19,6 +19,14 @@ from ceil_dlp.detectors.patterns import PatternMatch
 
 logger = logging.getLogger(__name__)
 
+# Presidio emits very low-confidence matches for noisy numeric entities:
+# US_DRIVER_LICENSE scores 0.01 on any bare number (context sizes, dates,
+# ids), US_BANK_NUMBER 0.05, US_PASSPORT 0.05. Ignore results below this
+# floor. Real detections score >= 0.3 (a formatted DL 0.3, passport/phone 0.4,
+# SSN 0.5, person 0.85, api_key/aws_credential/card/iban/crypto 0.8-1.0).
+# Override with CEIL_DLP_MIN_SCORE for tuning without a rebuild.
+SCORE_THRESHOLD = float(os.environ.get("CEIL_DLP_MIN_SCORE", "0.3"))
+
 # Suppress expected Presidio warnings:
 # - Language mismatch warnings: Presidio loads recognizers for multiple languages (es, it, pl, etc.)
 #   but we only use English. These warnings are harmless but noisy.
@@ -404,6 +412,9 @@ def _detect_with_presidio(
         entity_type = result.entity_type
         pii_type = entity_to_pii_type.get(entity_type)
         if pii_type:
+            # Drop low-confidence noise (see SCORE_THRESHOLD above).
+            if result.score < SCORE_THRESHOLD:
+                continue
             matched_text = text[result.start : result.end]
             # Numeric-body FP: the match is the body of a credential token
             if pii_type in _TOKEN_BODY_FP_TYPES and _is_credential_token_fragment(

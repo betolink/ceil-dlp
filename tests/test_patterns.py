@@ -40,6 +40,18 @@ def test_aws_credential_detection():
         assert results.get("aws_credential"), f"failed to detect: {text}"
 
 
+def test_low_confidence_numeric_noise_ignored():
+    """Bare numbers (context sizes, dates) must not be driver's licenses.
+
+    Presidio scores US_DRIVER_LICENSE 0.01 on any number; the adapter drops
+    results below SCORE_THRESHOLD so system prompts don't get blocked.
+    """
+    noise = "context window 128000 and 200000 tokens, released 2024-08-06"
+    assert "us_driver_license" not in detect_pii_in_text(noise)
+    # A real license (with context) is still detected.
+    assert "us_driver_license" in detect_pii_in_text("driver license A1234567")
+
+
 def test_credential_token_not_misdetected_as_driver_license():
     """Slack/GitHub-style tokens must not be classed as driver's licenses.
 

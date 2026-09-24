@@ -40,6 +40,18 @@ def test_aws_credential_detection():
         assert results.get("aws_credential"), f"failed to detect: {text}"
 
 
+def test_credential_token_not_misdetected_as_driver_license():
+    """Slack/GitHub-style tokens must not be classed as driver's licenses.
+
+    Their numeric bodies match US_DRIVER_LICENSE; the adapter excludes matches
+    that are part of a known credential token. Fixture assembled at runtime.
+    """
+    token = "xoxb-" + "123456789012" + "-" + "1234567890123" + "-abcdefghijklmnopqrstuv"
+    results = detect_pii_in_text(f"token {token}")
+    assert "us_driver_license" not in results, results
+    assert results.get("api_key"), results
+
+
 def test_secret_false_positive_filter():
     """looks_like_secret rejects low-signal strings (git hashes, keywords)."""
     from ceil_dlp.detectors.patterns import looks_like_secret

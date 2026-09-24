@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from functools import lru_cache
 
 # Set transformers verbosity BEFORE importing anything that might use transformers
@@ -357,6 +358,29 @@ def get_analyzer(
     return _get_analyzer_cached(ner_strength, _custom_patterns_key(custom_patterns))
 
 
+# Driver's-license recognizers are noisy: the numeric body of credential
+# tokens (Slack xoxb-, GitHub ghp_, OpenAI sk-, AWS AKIA…) can match the
+# US_DRIVER_LICENSE pattern. Skip such matches when they are part of a known
+# credential token rather than a real license number.
+_DL_TYPES: frozenset[str] = frozenset({"us_driver_license", "it_driver_license"})
+
+_TOKEN_PREFIX = (
+    r"xox[abprs]-|gh[opurs]_|github_pat_|glpat-|sk-|pk-|rk-|"
+    r"shpat_|shpca_|shpss_|sq0[a-z]{2}-|key-|SG\.|"
+    r"AKIA|ASIA|ABIA|ACCA|AROA|AIza|EAAB"
+)
+_TOKEN_BEFORE_RE = re.compile(r"(?:" + _TOKEN_PREFIX + r")$")
+_TOKEN_AT_START_RE = re.compile(r"^(?:" + _TOKEN_PREFIX + r")")
+
+
+def _is_credential_token_fragment(text: str, start: int, matched: str) -> bool:
+    """True when a (false-positive) match is really part of a credential token."""
+    if _TOKEN_AT_START_RE.match(matched):
+        return True
+    window = text[max(0, start - 24) : start]
+    return bool(_TOKEN_BEFORE_RE.search(window))
+
+
 def _detect_with_presidio(
     text: str,
     ner_strength: int = 1,
@@ -371,6 +395,11 @@ def _detect_with_presidio(
         pii_type = entity_to_pii_type.get(entity_type)
         if pii_type:
             matched_text = text[result.start : result.end]
+            # Driver's-license FP: the match is the body of a credential token
+            if pii_type in _DL_TYPES and _is_credential_token_fragment(
+                text, result.start, matched_text
+            ):
+                continue
             # False-positive filter for secret-shaped types
             if pii_type in patterns.SECRET_TYPES and not patterns.looks_like_secret(
                 matched_text

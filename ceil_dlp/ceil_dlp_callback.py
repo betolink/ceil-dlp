@@ -52,8 +52,11 @@ else:
 class _PatchedCeilDLPHandler(CustomLogger):
     # Streaming output is held back by up to this many characters so a secret
     # (or pseudonym) split across SSE chunk boundaries is still transformed
-    # before any part of it is emitted. Adds this much tail latency to streams.
-    _MASK_KEEP = 80
+    # before any part of it is emitted. Must exceed the longest detectable
+    # secret (Azure key 88, AWS session token 100+, most API keys); PEM blocks
+    # are unbounded but never stream as one contiguous run in practice.
+    # Adds this much tail latency to streamed responses.
+    _MASK_KEEP = 256
 
     def __init__(self, inner: CeilDLPHandler) -> None:
         super().__init__()

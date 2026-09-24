@@ -473,6 +473,24 @@ class CeilDLPHandler(CustomLogger):
                             mode=mode,
                         )
 
+                # Per-policy "observe": log the detection for the dashboard but
+                # take no block/mask action (used for low-risk PII under a
+                # secrets-focused policy).
+                for pii_type, matches in detections.items():
+                    policy = self.config.get_policy(pii_type)
+                    if not policy or not policy.enabled or policy.action != "observe":
+                        continue
+                    if not self._should_apply_policy(policy, model):
+                        continue
+                    self.audit_logger.log_detection(
+                        user_id=user_id,
+                        pii_type=pii_type,
+                        action="observe",
+                        redacted_items=[match[0] for match in matches],
+                        request_id=data.get("litellm_call_id"),
+                        mode=mode,
+                    )
+
                 return data
 
         except Exception as e:

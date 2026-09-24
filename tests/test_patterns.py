@@ -48,6 +48,8 @@ def test_low_confidence_numeric_noise_ignored():
     """
     noise = "context window 128000 and 200000 tokens, released 2024-08-06"
     assert "us_driver_license" not in detect_pii_in_text(noise)
+    # A DL-shaped token with no license context (score 0.3) is also ignored.
+    assert "us_driver_license" not in detect_pii_in_text("token A1234567 here")
     # A real license (with context) is still detected.
     assert "us_driver_license" in detect_pii_in_text("driver license A1234567")
 

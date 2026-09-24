@@ -27,6 +27,16 @@ logger = logging.getLogger(__name__)
 # Override with CEIL_DLP_MIN_SCORE for tuning without a rebuild.
 SCORE_THRESHOLD = float(os.environ.get("CEIL_DLP_MIN_SCORE", "0.3"))
 
+# Noisy numeric types whose matches are only trustworthy with Presidio's
+# context boost: US_DRIVER_LICENSE scores 0.01 (bare number) / 0.3 (DL-shaped
+# token) without context and 0.65 with "driver license"; US_BANK_NUMBER 0.05.
+# Require the context-boosted score so system-prompt tokens don't block.
+SCORE_THRESHOLD_BY_TYPE = {
+    "us_driver_license": 0.6,
+    "it_driver_license": 0.6,
+    "us_bank_number": 0.6,
+}
+
 # Suppress expected Presidio warnings:
 # - Language mismatch warnings: Presidio loads recognizers for multiple languages (es, it, pl, etc.)
 #   but we only use English. These warnings are harmless but noisy.
@@ -381,6 +391,18 @@ _TOKEN_PREFIX = (
 )
 _TOKEN_AT_START_RE = re.compile(r"(?:" + _TOKEN_PREFIX + r")")
 
+# Types the FP-debug switch logs (never secret-shaped types).
+_DEBUG_TYPES = frozenset(
+    {
+        "us_driver_license",
+        "it_driver_license",
+        "us_bank_number",
+        "us_passport",
+        "ssn",
+        "credit_card",
+    }
+)
+
 
 def _is_credential_token_fragment(text: str, start: int, matched: str) -> bool:
     """True when a (false-positive) match is really part of a credential token."""
@@ -413,9 +435,19 @@ def _detect_with_presidio(
         pii_type = entity_to_pii_type.get(entity_type)
         if pii_type:
             # Drop low-confidence noise (see SCORE_THRESHOLD above).
-            if result.score < SCORE_THRESHOLD:
+            threshold = SCORE_THRESHOLD_BY_TYPE.get(pii_type, SCORE_THRESHOLD)
+            if result.score < threshold:
                 continue
             matched_text = text[result.start : result.end]
+            # Diagnostic (CEIL_DLP_DEBUG_MATCHES=1): surface the matched value so
+            # a false positive can be identified via Loki/Grafana. Off by default.
+            if os.environ.get("CEIL_DLP_DEBUG_MATCHES") and pii_type in _DEBUG_TYPES:
+                logger.warning(
+                    "ceil-dlp debug match: type=%s score=%.2f value=%r",
+                    pii_type,
+                    result.score,
+                    matched_text,
+                )
             # Numeric-body FP: the match is the body of a credential token
             if pii_type in _TOKEN_BODY_FP_TYPES and _is_credential_token_fragment(
                 text, result.start, matched_text

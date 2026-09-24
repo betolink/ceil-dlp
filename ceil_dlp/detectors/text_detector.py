@@ -11,6 +11,7 @@ PRESIDIO_TYPES = frozenset(set(PRESIDIO_TO_PII_TYPE.values()))
 CUSTOM_TYPES = frozenset(
     {
         "api_key",
+        "aws_credential",
         "pem_key",
         "jwt_token",
         "database_url",

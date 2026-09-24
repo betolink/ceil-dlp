@@ -162,6 +162,25 @@ class _PatchedCeilDLPHandler(CustomLogger):
         except Exception:
             pass
 
+    def _mask_chunk_inplace(self, chunk: Any, model: str) -> None:
+        """Mask model-generated PII in a streaming delta.
+
+        Best-effort: matches are applied per SSE chunk, so a secret split across
+        chunk boundaries may evade masking. Non-streaming responses are exact.
+        """
+        try:
+            for choice in chunk.choices:
+                d = getattr(choice, "delta", None)
+                if d is None:
+                    continue
+                if getattr(d, "content", None):
+                    d.content = self._inner.mask_response_text(d.content, model)
+                rc = getattr(d, "reasoning_content", None)
+                if rc:
+                    d.reasoning_content = self._inner.mask_response_text(rc, model)
+        except Exception:
+            pass
+
     def _apply_per_message_transforms(
         self, messages: list[Any], model: str, data: dict[str, Any]
     ) -> tuple[list[Any], str | None]:
@@ -316,6 +335,23 @@ class _PatchedCeilDLPHandler(CustomLogger):
         response: Any,
     ) -> Any | None:
         rid = data.get("_whistledown_request_id")
+        model = data.get("model", "") if isinstance(data, dict) else ""
+
+        # Gap 3: model-generated PII (incl. reasoning_content) must be masked
+        # before the response leaves the gateway. Do this before whistledown
+        # reversal so only raw model output is matched.
+        if hasattr(response, "choices"):
+            for choice in response.choices:
+                if not hasattr(choice, "message"):
+                    continue
+                msg = choice.message
+                if getattr(msg, "content", None):
+                    msg.content = self._inner.mask_response_text(msg.content, model)
+                if getattr(msg, "reasoning_content", None):
+                    msg.reasoning_content = self._inner.mask_response_text(
+                        msg.reasoning_content, model
+                    )
+
         if rid and hasattr(response, "choices"):
             for choice in response.choices:
                 if not hasattr(choice, "message"):
@@ -380,8 +416,13 @@ def _ensure_data_generator_patched() -> None:
             )
             if rid is None and isinstance(request_data, dict):
                 rid = request_data.get("litellm_call_id")
+            stream_model = (
+                request_data.get("model", "") if isinstance(request_data, dict) else ""
+            )
             try:
                 async for chunk in response:
+                    if hasattr(chunk, "choices"):
+                        _instance._mask_chunk_inplace(chunk, stream_model)
                     if rid and hasattr(chunk, "choices"):
                         _instance._reverse_chunk_inplace(chunk, rid)
 

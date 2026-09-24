@@ -16,11 +16,39 @@ def test_api_key_detection():
     assert "api_key" in results1
     assert len(results1["api_key"]) > 0
 
-    # Test AWS key
-    text2 = "Access key: AKIA1234567890ABCDEF"
-    results2 = detect_pii_in_text(text2, enabled_types={"api_key"})
-    assert "api_key" in results2
-    assert len(results2["api_key"]) > 0
+    # Prefix-agnostic modern keys (regression: sk-proj-/sk-FAKE- used to leak).
+    # Fixtures are assembled at runtime so secret scanners don't flag them.
+    sample_keys = [
+        "sk-" + "proj-" + "4xX9mZqL7bQ2vT8wY5nR3kJ6hG0dS1eF",
+        "sk-" + "FAKE-" + "9f8e7d6c5b4a3210abcdef1234567890",
+        "ghp_" + "16C7e42F292c6912E7710c838347Ae178B4a",
+        "xoxb-" + "123456789012" + "-" + "1234567890123" + "-abcdefghijklmnopqrstuv",
+    ]
+    for key in sample_keys:
+        results = detect_pii_in_text(f"token {key}", enabled_types={"api_key"})
+        assert results.get("api_key"), f"failed to detect {key}"
+
+
+def test_aws_credential_detection():
+    """AWS access key IDs and context-anchored secret keys are detected."""
+    aws_secret = "wJalr" + "XUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    for text in (
+        "Access key: AKIA1234567890ABCDEF",
+        "aws_secret_access_key = " + aws_secret,
+    ):
+        results = detect_pii_in_text(text, enabled_types={"aws_credential"})
+        assert results.get("aws_credential"), f"failed to detect: {text}"
+
+
+def test_secret_false_positive_filter():
+    """looks_like_secret rejects low-signal strings (git hashes, keywords)."""
+    from ceil_dlp.detectors.patterns import looks_like_secret
+
+    assert looks_like_secret("sk-" + "proj-" + "4xX9mZqL7bQ2vT8wY5nR3kJ6hG0dS1eF")
+    assert looks_like_secret("AKIAIOSFODNN7EXAMPLE")
+    assert not looks_like_secret("sk-abcdefghijklmnopqrstuvwxyz")
+    assert not looks_like_secret("abcdef1234567890abcdef1234567890abcdef12")
+    assert not looks_like_secret("AWS_REGION")
 
 
 def test_pem_key_detection():

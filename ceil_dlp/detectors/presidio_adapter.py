@@ -13,6 +13,7 @@ os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
 
 from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer, RecognizerRegistry
 
+from ceil_dlp.detectors import patterns
 from ceil_dlp.detectors.patterns import PatternMatch
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,7 @@ PRESIDIO_TO_PII_TYPE: dict[str, str] = {
     "JWT_TOKEN": "jwt_token",
     "DATABASE_URL": "database_url",
     "CLOUD_CREDENTIAL": "cloud_credential",
+    "AWS_CREDENTIAL": "aws_credential",
 }
 
 
@@ -369,6 +371,11 @@ def _detect_with_presidio(
         pii_type = entity_to_pii_type.get(entity_type)
         if pii_type:
             matched_text = text[result.start : result.end]
+            # False-positive filter for secret-shaped types
+            if pii_type in patterns.SECRET_TYPES and not patterns.looks_like_secret(
+                matched_text
+            ):
+                continue
             match = (matched_text, result.start, result.end)
             if pii_type not in detections:
                 detections[pii_type] = []

@@ -477,6 +477,56 @@ class CeilDLPHandler(CustomLogger):
             logger.error(f"CeilDLP error in pre_call_hook: {e}", exc_info=True)
             return data
 
+    def mask_response_text(self, text: str, model: str = "") -> str:
+        """Detect and mask model-generated PII in a response field.
+
+        Applied to response ``content`` and ``reasoning_content`` so generated
+        secrets and high-risk PII (policy action ``mask`` or ``block``) are not
+        returned verbatim. Whistledown types are intentionally excluded here;
+        they are restored client-side via ``reverse_transform`` instead.
+        """
+        if not text:
+            return text
+        try:
+            detections = detect_pii_in_text(
+                text,
+                enabled_types=self.enabled_types,
+                ner_strength=self.config.ner_strength,
+                custom_patterns=self.config.custom_patterns,
+            )
+        except Exception as e:
+            logger.error(f"CeilDLP response scan failed: {e}", exc_info=True)
+            return text
+        if not detections:
+            return text
+
+        to_mask: dict[str, list[tuple[str, int, int]]] = {}
+        for pii_type, matches in detections.items():
+            if not matches:
+                continue
+            policy = self.config.get_policy(pii_type)
+            if not policy or not policy.enabled:
+                continue
+            if policy.action not in ("mask", "block"):
+                continue
+            if model and not self._should_apply_policy(policy, model):
+                continue
+            to_mask[pii_type] = matches
+
+        if not to_mask:
+            return text
+        try:
+            redacted, _ = redact_text(
+                text,
+                detections=to_mask,
+                ner_strength=self.config.ner_strength,
+                custom_patterns=self.config.custom_patterns,
+            )
+            return redacted
+        except Exception as e:
+            logger.error(f"CeilDLP response redaction failed: {e}", exc_info=True)
+            return text
+
     async def async_post_call_success_hook(
         self,
         data: dict[str, Any],

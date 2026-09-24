@@ -49,13 +49,21 @@ policies:
     enabled: true
 
   api_key:
-    action: block
+    # Tokenize (mask) rather than block: replace with [REDACTED_API_KEY] before
+    # the model sees it and keep the conversation flowing. Use action: block to
+    # reject the request instead.
+    action: mask
     enabled: true
     # Example: Allow API keys for specific trusted models
     # models:
     #   allow:
     #     - "ollama/qwen3:0.6b"
     #     - "self-hosted/.*"
+
+  aws_credential:
+    # AWS access key IDs (AKIA/ASIA/…) and context-anchored secret access keys.
+    action: mask
+    enabled: true
 
   pem_key:
     action: block
@@ -164,6 +172,7 @@ policies:
 #   - email
 #   - phone
 #   - api_key
+#   - aws_credential
 #   - pem_key
 #   - jwt_token
 

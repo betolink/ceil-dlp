@@ -10,20 +10,30 @@ have been simplified to regex-only patterns.
 
 from __future__ import annotations
 
+import math
+import re
 from typing import Literal
 
 # PatternMatch is a tuple of (matched_text, start_pos, end_pos)
 PatternMatch = tuple[str, int, int]
 
-PatternType = Literal["api_key", "pem_key", "jwt_token", "database_url", "cloud_credential"]
+PatternType = Literal[
+    "api_key",
+    "aws_credential",
+    "pem_key",
+    "jwt_token",
+    "database_url",
+    "cloud_credential",
+]
 
 
 # Patterns based on gitleaks default configuration
 # Reference: https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
 PATTERNS: dict[PatternType, list[str]] = {
     "api_key": [
-        # OpenAI API keys (sk- prefix, 32+ chars)
-        r"\bsk-[a-zA-Z0-9]{32,}\b",
+        # Prefix-agnostic modern keys: sk-/pk-/rk- followed by a char and
+        # 19+ of [A-Za-z0-9_-]. Covers sk-proj-, sk-svcacct-, sk-FAKE-…
+        r"\b(?:sk|pk|rk)-[A-Za-z0-9][A-Za-z0-9_-]{19,}\b",
         # Anthropic API keys (sk-ant-api03- prefix, 95+ chars)
         r"\bsk-ant-api03-[a-zA-Z0-9\-_]{95,}\b",
         # GitHub tokens (ghp_, gho_, ghu_, ghs_, ghr_ prefixes, 36+ chars)
@@ -32,22 +42,15 @@ PATTERNS: dict[PatternType, list[str]] = {
         r"\bglpat-[a-zA-Z0-9\-_]{20,}\b",
         # Stripe keys (sk_live_, sk_test_, rk_live_, rk_test_ prefixes)
         r"\b(?:sk|rk)_(?:live|test)_[a-zA-Z0-9]{24,}\b",
-        # Slack tokens (xoxb-, xoxa-, xoxp-, xoxe-, xoxs- prefixes)
+        # Slack tokens (xoxb-, xoxa-, xoxp-, xoxr-, xoxs- prefixes)
+        r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",
         r"\bxox[bapes]-\d+-[a-zA-Z0-9-]{27,}\b",
+        # Authorization: Bearer <token> header
+        r"(?i)authorization\s*[:=]\s*[\"']?bearer\s+[A-Za-z0-9._+/=-]{20,}",
         # Google API keys (AIza prefix, exactly 39 chars)
         r"\bAIza[0-9A-Za-z_-]{35}\b",
         # OCR-tolerant Google API keys: allow character misreads and count variations
         r"\bAIza[0-9A-Za-z_\-/|]{33,37}\b",
-        # AWS access keys (AKIA prefix, exactly 20 chars total)
-        # Standard format with word boundaries
-        r"\bAKIA[0-9A-Z]{16}\b",
-        # OCR-tolerant AWS access keys: handles common OCR misreads
-        # OCR may misread: 7→/, 0→O, I→1, etc. Allow 14-18 chars to handle count errors
-        r"\bAKIA[0-9A-Z/|]{14,18}(?:\s*\([^)]+\))?\b",
-        # AWS secret access keys (base64-like, exactly 40 chars with high entropy chars)
-        r"\b[A-Za-z0-9/+=]{40}\b",
-        # OCR-tolerant AWS secret access keys: allow character misreads and count variations
-        r"\b[A-Za-z0-9/+=|]{38,42}\b",
         # Azure Storage Account keys (base64, 88 chars)
         r"\b[A-Za-z0-9+/]{86}==\b",
         # OCR-tolerant Azure Storage Account keys: allow character misreads and count variations
@@ -124,6 +127,16 @@ PATTERNS: dict[PatternType, list[str]] = {
         # Generic database URL pattern
         r"(?:database|db|connection)[\s:=]+(?:url|uri|string)[\s:=]+([a-z]+://[^\s]+)",
     ],
+    "aws_credential": [
+        # Access key IDs: AKIA (long-term), ASIA (STS temp), ABIA, ACCA, AROA
+        r"\b(?:AKIA|ASIA|ABIA|ACCA|AROA)[0-9A-Z]{16}\b",
+        # Secret access key, context-anchored (AWS secret … <40-char value>)
+        r"(?i)aws[\s_-]{0,15}secret[\s_-]{0,15}(?:\w+[\s_-]{0,3}){0,2}?([A-Za-z0-9/+=]{40})\b",
+        # env / Terraform forms
+        r"(?i)aws_secret_access_key\s*[=:]\s*[\"']?[A-Za-z0-9/+=]{40}",
+        # STS session token (long base64ish, context-anchored)
+        r"(?i)(?:aws_session_token|x-amz-security-token)[\"'\s:=]{1,4}[\"']?[A-Za-z0-9/+=]{100,}",
+    ],
     "cloud_credential": [
         # Google Cloud service account keys (JSON-like)
         r'"type"\s*:\s*"service_account"[\s\S]{0,2000}?"private_key"\s*:\s*"-----BEGIN',
@@ -133,3 +146,41 @@ PATTERNS: dict[PatternType, list[str]] = {
         r"DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]{86}==;?",
     ],
 }
+
+
+# Secret types that get the false-positive filter below.
+SECRET_TYPES: frozenset[str] = frozenset({"api_key", "aws_credential", "cloud_credential"})
+
+_HEX40 = re.compile(r"[0-9a-fA-F]{40}")
+
+
+def _shannon_entropy(value: str) -> float:
+    if not value:
+        return 0.0
+    counts: dict[str, int] = {}
+    for ch in value:
+        counts[ch] = counts.get(ch, 0) + 1
+    n = len(value)
+    return -sum((c / n) * math.log2(c / n) for c in counts.values())
+
+
+def looks_like_secret(matched: str) -> bool:
+    """Heuristic false-positive filter for regex-detected secrets.
+
+    Requires a mixed alphanumeric body with at least ~3 bits/char of Shannon
+    entropy, and never treats a bare 40-char hex string (e.g. a git commit
+    hash) as a secret. Used for context-anchored or generic patterns.
+    """
+    body = matched.strip().strip("\"'").split()
+    if not body:
+        return False
+    candidate = body[-1].strip("\"',;.:")
+    if len(candidate) < 8:
+        return False
+    if _HEX40.fullmatch(candidate):
+        return False
+    has_digit = any(c.isdigit() for c in candidate)
+    has_alpha = any(c.isalpha() for c in candidate)
+    if not (has_digit and has_alpha):
+        return False
+    return _shannon_entropy(candidate) >= 3.0

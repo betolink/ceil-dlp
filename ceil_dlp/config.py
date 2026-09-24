@@ -32,6 +32,12 @@ class Config(BaseModel):
     audit_log_path: str | None = Field(default_factory=lambda: os.getenv("CEIL_DLP_AUDIT_LOG"))
     enabled_pii_types: list[str] = Field(default_factory=list)
     mode: Literal["observe", "enforce"] = Field(default="enforce")
+    media_scanning: bool = Field(
+        default=False,
+        description="Scan images and PDFs for PII (OCR/vision). Disabled by default "
+        "(text-only): media scanning requires the heavy optional dependencies "
+        "(presidio-image-redactor, python-doctr, pypdfium2) and is much slower.",
+    )
     default_policy: Policy | None = Field(
         default=None,
         description="Default policy to apply to any PII type that doesn't have an explicit policy. "

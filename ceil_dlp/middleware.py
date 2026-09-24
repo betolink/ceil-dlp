@@ -12,9 +12,12 @@ from litellm.proxy.proxy_server import UserAPIKeyAuth
 
 from ceil_dlp.audit import AuditLogger
 from ceil_dlp.config import Config, Policy
-from ceil_dlp.detectors.image_detector import detect_pii_in_image
+from ceil_dlp.detectors.image_detector import (
+    MEDIA_SCANNING_AVAILABLE,
+    detect_pii_in_image,
+)
 from ceil_dlp.detectors.model_matcher import matches_model
-from ceil_dlp.detectors.pdf_detector import detect_pii_in_pdf
+from ceil_dlp.detectors.pdf_detector import PDF_SCANNING_AVAILABLE, detect_pii_in_pdf
 from ceil_dlp.detectors.text_detector import detect_pii_in_text
 from ceil_dlp.redaction import redact_image, redact_pdf, redact_text
 from ceil_dlp.whistledown import WhistledownCache, whistledown_transform_text
@@ -98,6 +101,16 @@ class CeilDLPHandler(CustomLogger):
         self.audit_logger = AuditLogger(log_path=self.config.audit_log_path)
         self.whistledown_cache = WhistledownCache()
 
+        # Media scanning is opt-in; warn if requested without the optional deps.
+        if self.config.media_scanning and not (
+            MEDIA_SCANNING_AVAILABLE and PDF_SCANNING_AVAILABLE
+        ):
+            logger.warning(
+                "ceil-dlp: media_scanning is enabled but the image/PDF "
+                "dependencies are not installed; images and PDFs will not be "
+                "scanned."
+            )
+
         # Log initialization
         logger.info(
             "\n[ ceil-dlp plugin initialized ]\n",
@@ -177,7 +190,7 @@ class CeilDLPHandler(CustomLogger):
 
         # Detect PII in images and track which images have PII
         images_with_pii: list[tuple[bytes, dict[str, list[tuple[str, int, int]]]]] = []
-        if images:
+        if images and self.config.media_scanning:
             enabled_types = (
                 set(self.config.enabled_pii_types) if self.config.enabled_pii_types else None
             )
@@ -198,7 +211,7 @@ class CeilDLPHandler(CustomLogger):
 
         # Detect PII in PDFs and track which PDFs have PII
         pdfs_with_pii: list[tuple[bytes, dict[str, list[tuple[str, int, int]]]]] = []
-        if pdfs:
+        if pdfs and self.config.media_scanning:
             enabled_types = (
                 set(self.config.enabled_pii_types) if self.config.enabled_pii_types else None
             )

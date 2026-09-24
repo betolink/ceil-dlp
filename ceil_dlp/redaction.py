@@ -5,9 +5,17 @@ import logging
 from pathlib import Path
 from typing import cast
 
-import pypdfium2 as pdfium
 from PIL import Image
-from presidio_image_redactor import ImageRedactorEngine
+
+try:
+    import pypdfium2 as pdfium
+    from presidio_image_redactor import ImageRedactorEngine
+
+    MEDIA_REDACTION_AVAILABLE = True
+except ImportError:  # text-only deployment
+    pdfium = None  # type: ignore[assignment]
+    ImageRedactorEngine = None  # type: ignore[assignment]
+    MEDIA_REDACTION_AVAILABLE = False
 
 from ceil_dlp.detectors.image_detector import (
     get_doctr_heavy_image_analyzer,

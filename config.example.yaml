@@ -8,6 +8,12 @@
 #   To mask without blocking, set policies to action: "mask" instead of "block"
 mode: enforce
 
+# Media scanning (optional): scan images and PDFs for PII using OCR/vision.
+# Disabled by default (text-only) because it needs the heavy optional
+# dependencies (presidio-image-redactor, python-doctr, pypdfium2) and is much
+# slower. Set to true to also protect image and PDF content.
+# media_scanning: false
+
 # Default Policy (optional): Apply to all PII types that don't have explicit policies
 # If not specified, PII types without explicit policies are treated as "observe"
 # Uncomment to mask all detected PII by default:

@@ -4,7 +4,13 @@ import io
 import logging
 from pathlib import Path
 
-import pypdfium2 as pdfium
+try:
+    import pypdfium2 as pdfium
+
+    PDF_SCANNING_AVAILABLE = True
+except ImportError:  # text-only deployment
+    pdfium = None  # type: ignore[assignment]
+    PDF_SCANNING_AVAILABLE = False
 
 from ceil_dlp.detectors.image_detector import detect_pii_in_image
 from ceil_dlp.detectors.patterns import PatternMatch
@@ -35,6 +41,8 @@ def detect_pii_in_pdf(
         Dictionary mapping PII type to list of matches (same format as text detection).
         Returns empty dict if PDF processing fails.
     """
+    if not PDF_SCANNING_AVAILABLE:
+        return {}
     try:
         # Load PDF
         if isinstance(pdf_data, (str, Path)):

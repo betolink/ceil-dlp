@@ -1,13 +1,17 @@
-"""Image PII detection using Presidio Image Redactor."""
+"""Image PII detection using Presidio Image Redactor.
+
+Media scanning is optional: when the image/OCR dependencies are not installed
+(text-only deployment) this module still imports and detection returns {}.
+"""
+
+from __future__ import annotations
 
 import logging
 from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image
-from presidio_image_redactor import ImageAnalyzerEngine
 
-from ceil_dlp.detectors.doctr_ocr import get_doctr_heavy_ocr_engine, get_doctr_ocr_engine
 from ceil_dlp.detectors.patterns import PatternMatch
 from ceil_dlp.detectors.presidio_adapter import (
     PRESIDIO_TO_PII_TYPE,
@@ -15,6 +19,20 @@ from ceil_dlp.detectors.presidio_adapter import (
     get_analyzer,
 )
 from ceil_dlp.utils import image_to_pil_image
+
+try:
+    from presidio_image_redactor import ImageAnalyzerEngine
+    from ceil_dlp.detectors.doctr_ocr import (
+        get_doctr_heavy_ocr_engine,
+        get_doctr_ocr_engine,
+    )
+
+    MEDIA_SCANNING_AVAILABLE = True
+except ImportError:  # text-only deployment
+    ImageAnalyzerEngine = None  # type: ignore[assignment]
+    get_doctr_heavy_ocr_engine = None  # type: ignore[assignment]
+    get_doctr_ocr_engine = None  # type: ignore[assignment]
+    MEDIA_SCANNING_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +223,8 @@ def detect_pii_in_image(
         Dictionary mapping PII type to list of matches (same format as text detection).
         Returns empty dict if image processing fails.
     """
+    if not MEDIA_SCANNING_AVAILABLE:
+        return {}
     try:
         # Load image
         image = image_to_pil_image(image_data)

@@ -358,27 +358,37 @@ def get_analyzer(
     return _get_analyzer_cached(ner_strength, _custom_patterns_key(custom_patterns))
 
 
-# Driver's-license recognizers are noisy: the numeric body of credential
-# tokens (Slack xoxb-, GitHub ghp_, OpenAI sk-, AWS AKIA…) can match the
-# US_DRIVER_LICENSE pattern. Skip such matches when they are part of a known
-# credential token rather than a real license number.
-_DL_TYPES: frozenset[str] = frozenset({"us_driver_license", "it_driver_license"})
+# Numeric-body recognizers are noisy: the digit groups inside credential
+# tokens (Slack xoxb-, GitHub ghp_, OpenAI sk-, AWS AKIA…) match these
+# Presidio entities. Skip such matches when they are part of a known
+# credential token rather than a real license/bank number.
+_TOKEN_BODY_FP_TYPES: frozenset[str] = frozenset(
+    {"us_driver_license", "it_driver_license", "us_bank_number"}
+)
 
 _TOKEN_PREFIX = (
     r"xox[abprs]-|gh[opurs]_|github_pat_|glpat-|sk-|pk-|rk-|"
     r"shpat_|shpca_|shpss_|sq0[a-z]{2}-|key-|SG\.|"
     r"AKIA|ASIA|ABIA|ACCA|AROA|AIza|EAAB"
 )
-_TOKEN_BEFORE_RE = re.compile(r"(?:" + _TOKEN_PREFIX + r")$")
-_TOKEN_AT_START_RE = re.compile(r"^(?:" + _TOKEN_PREFIX + r")")
+_TOKEN_AT_START_RE = re.compile(r"(?:" + _TOKEN_PREFIX + r")")
 
 
 def _is_credential_token_fragment(text: str, start: int, matched: str) -> bool:
     """True when a (false-positive) match is really part of a credential token."""
     if _TOKEN_AT_START_RE.match(matched):
         return True
-    window = text[max(0, start - 24) : start]
-    return bool(_TOKEN_BEFORE_RE.search(window))
+    # Widen to the whitespace-delimited word containing the match: a token's
+    # numeric segments (xoxb-123456789012-1234567890123-abc) are not space
+    # separated, so the second segment has no token prefix immediately before it.
+    ws_start = start
+    while ws_start > 0 and not text[ws_start - 1].isspace():
+        ws_start -= 1
+    ws_end = start + len(matched)
+    while ws_end < len(text) and not text[ws_end].isspace():
+        ws_end += 1
+    word = text[ws_start:ws_end].lstrip("\"'`([{<").rstrip(".,;:!?)]}>\"'`")
+    return bool(_TOKEN_AT_START_RE.match(word))
 
 
 def _detect_with_presidio(
@@ -395,8 +405,8 @@ def _detect_with_presidio(
         pii_type = entity_to_pii_type.get(entity_type)
         if pii_type:
             matched_text = text[result.start : result.end]
-            # Driver's-license FP: the match is the body of a credential token
-            if pii_type in _DL_TYPES and _is_credential_token_fragment(
+            # Numeric-body FP: the match is the body of a credential token
+            if pii_type in _TOKEN_BODY_FP_TYPES and _is_credential_token_fragment(
                 text, result.start, matched_text
             ):
                 continue

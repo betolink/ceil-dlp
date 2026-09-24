@@ -100,6 +100,9 @@ class CeilDLPHandler(CustomLogger):
         )
         self.audit_logger = AuditLogger(log_path=self.config.audit_log_path)
         self.whistledown_cache = WhistledownCache()
+        # Dedup key for response-path audit events: request_id -> pii types
+        # already logged, so streaming (per-chunk) detection logs once per type.
+        self._response_logged: dict[str, set[str]] = {}
 
         # Media scanning is opt-in; warn if requested without the optional deps.
         if self.config.media_scanning and not (
@@ -477,7 +480,40 @@ class CeilDLPHandler(CustomLogger):
             logger.error(f"CeilDLP error in pre_call_hook: {e}", exc_info=True)
             return data
 
-    def mask_response_text(self, text: str, model: str = "") -> str:
+    def _audit_response_detections(
+        self,
+        request_id: str,
+        user_id: str | None,
+        to_mask: dict[str, list[tuple[str, int, int]]],
+    ) -> None:
+        """Audit-log response detections once per (request, pii_type)."""
+        logged = self._response_logged.setdefault(request_id, set())
+        for pii_type, matches in to_mask.items():
+            if pii_type in logged:
+                continue
+            logged.add(pii_type)
+            policy = self.config.get_policy(pii_type)
+            self.audit_logger.log_detection(
+                user_id=user_id,
+                pii_type=pii_type,
+                action=policy.action if policy else "mask",
+                redacted_items=[m[0] for m in matches],
+                request_id=request_id,
+                mode=self.config.mode,
+                source="response",
+            )
+
+    def clear_response_audit_state(self, request_id: str | None) -> None:
+        if request_id:
+            self._response_logged.pop(request_id, None)
+
+    def mask_response_text(
+        self,
+        text: str,
+        model: str = "",
+        request_id: str | None = None,
+        user_id: str | None = None,
+    ) -> str:
         """Detect and mask model-generated PII in a response field.
 
         Applied to response ``content`` and ``reasoning_content`` so generated
@@ -515,6 +551,11 @@ class CeilDLPHandler(CustomLogger):
 
         if not to_mask:
             return text
+
+        # Observability: audit response-path detections (hashed values only).
+        if request_id:
+            self._audit_response_detections(request_id, user_id, to_mask)
+
         try:
             redacted, _ = redact_text(
                 text,

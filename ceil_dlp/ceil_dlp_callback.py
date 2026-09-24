@@ -170,7 +170,12 @@ class _PatchedCeilDLPHandler(CustomLogger):
             pass
 
     def transform_streaming_text(
-        self, request_id: str | None, field: str, chunk_text: str, model: str = ""
+        self,
+        request_id: str | None,
+        field: str,
+        chunk_text: str,
+        model: str = "",
+        user_id: str | None = None,
     ) -> str:
         """Mask generated PII and reverse pseudonyms over a sliding window.
 
@@ -181,7 +186,7 @@ class _PatchedCeilDLPHandler(CustomLogger):
         """
         key = f"{request_id or '_fallback'}:{field}"
         buf = self._stream_buffers.get(key, "") + chunk_text
-        buf = self._inner.mask_response_text(buf, model)
+        buf = self._inner.mask_response_text(buf, model, request_id, user_id)
         # Only reverse with a real request id (never another request's cache).
         replacements = self._get_replacements(request_id) if request_id else {}
         if replacements:
@@ -193,7 +198,11 @@ class _PatchedCeilDLPHandler(CustomLogger):
         return buf[: len(buf) - keep_len]
 
     def _transform_chunk_inplace(
-        self, chunk: Any, request_id: str | None, model: str
+        self,
+        chunk: Any,
+        request_id: str | None,
+        model: str,
+        user_id: str | None = None,
     ) -> None:
         try:
             for choice in chunk.choices:
@@ -202,12 +211,12 @@ class _PatchedCeilDLPHandler(CustomLogger):
                     continue
                 if getattr(d, "content", None):
                     d.content = self.transform_streaming_text(
-                        request_id, "content", d.content, model
+                        request_id, "content", d.content, model, user_id
                     )
                 rc = getattr(d, "reasoning_content", None)
                 if rc:
                     d.reasoning_content = self.transform_streaming_text(
-                        request_id, "reasoning", rc, model
+                        request_id, "reasoning", rc, model, user_id
                     )
         except Exception:
             pass
@@ -367,6 +376,8 @@ class _PatchedCeilDLPHandler(CustomLogger):
     ) -> Any | None:
         rid = data.get("_whistledown_request_id")
         model = data.get("model", "") if isinstance(data, dict) else ""
+        user_id = getattr(user_api_key_dict, "user_id", None)
+        log_key = rid or (data.get("litellm_call_id") if isinstance(data, dict) else None)
 
         # Gap 3: model-generated PII (incl. reasoning_content) must be masked
         # before the response leaves the gateway. Do this before whistledown
@@ -377,10 +388,12 @@ class _PatchedCeilDLPHandler(CustomLogger):
                     continue
                 msg = choice.message
                 if getattr(msg, "content", None):
-                    msg.content = self._inner.mask_response_text(msg.content, model)
+                    msg.content = self._inner.mask_response_text(
+                        msg.content, model, log_key, user_id
+                    )
                 if getattr(msg, "reasoning_content", None):
                     msg.reasoning_content = self._inner.mask_response_text(
-                        msg.reasoning_content, model
+                        msg.reasoning_content, model, log_key, user_id
                     )
 
         if rid and hasattr(response, "choices"):
@@ -392,6 +405,7 @@ class _PatchedCeilDLPHandler(CustomLogger):
                     msg.reasoning_content = self._inner.whistledown_cache.reverse_transform(
                         rid, msg.reasoning_content
                     )
+        self._inner.clear_response_audit_state(log_key)
         return await self._inner.async_post_call_success_hook(
             data=data, user_api_key_dict=user_api_key_dict, response=response,
         )
@@ -450,10 +464,13 @@ def _ensure_data_generator_patched() -> None:
             stream_model = (
                 request_data.get("model", "") if isinstance(request_data, dict) else ""
             )
+            stream_user = getattr(user_api_key_dict, "user_id", None)
             try:
                 async for chunk in response:
                     if hasattr(chunk, "choices"):
-                        _instance._transform_chunk_inplace(chunk, rid, stream_model)
+                        _instance._transform_chunk_inplace(
+                            chunk, rid, stream_model, stream_user
+                        )
 
                     chunk = await _ps.proxy_logging_obj.async_post_call_streaming_hook(
                         user_api_key_dict=user_api_key_dict,
@@ -473,6 +490,7 @@ def _ensure_data_generator_patched() -> None:
                 # Always run: the masking buffer is keyed on "_fallback" when the
                 # request has no whistledown id, and its tail must not be lost.
                 leftover = _instance.flush_streaming_buffers(rid)
+                _instance._inner.clear_response_audit_state(rid)
                 if leftover:
                     from litellm.types.utils import Delta, ModelResponse, StreamingChoices
 

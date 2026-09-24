@@ -76,6 +76,7 @@ class AuditLogger:
         redacted_items: list[str],
         request_id: str | None = None,
         mode: str | None = None,
+        source: str = "request",
     ) -> None:
         """
         Log a PII detection event.
@@ -87,11 +88,14 @@ class AuditLogger:
             redacted_items: List of detected PII values (will be hashed)
             request_id: Request identifier (if available)
             mode: Operational mode (observe/enforce)
+            source: Where the detection happened ("request" or "response")
         """
         hashed_items = [hash_pii(item, length=16) for item in redacted_items]
 
         # Use extra parameter to pass structured data to JSON logger
         extra_data = {
+            "event": "dlp_detection",
+            "source": source,
             "timestamp": datetime.now(UTC).isoformat(),
             "user_id": user_id,
             "request_id": request_id,
@@ -123,6 +127,8 @@ class AuditLogger:
         """
         # Use extra parameter to pass structured data to JSON logger
         extra_data = {
+            "event": "dlp_block",
+            "source": "request",
             "timestamp": datetime.now(UTC).isoformat(),
             "user_id": user_id,
             "request_id": request_id,

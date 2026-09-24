@@ -386,7 +386,9 @@ def _ensure_data_generator_patched() -> None:
                         _instance._reverse_chunk_inplace(chunk, rid)
 
                     chunk = await _ps.proxy_logging_obj.async_post_call_streaming_hook(
-                        user_api_key_dict=user_api_key_dict, response=chunk
+                        user_api_key_dict=user_api_key_dict,
+                        response=chunk,
+                        data=request_data,
                     )
 
                     if isinstance(chunk, _BaseModel):

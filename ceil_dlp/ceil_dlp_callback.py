@@ -368,7 +368,11 @@ def _ensure_data_generator_patched() -> None:
             _GEN_PATCHED = True
             return
 
-        async def _reversing_data_generator(response, user_api_key_dict, request_data):
+        # Tolerate LiteLLM signature drift across versions: newer releases
+        # pass extra params (request=, responses_stream_errors=, ...).
+        async def _reversing_data_generator(
+            response, user_api_key_dict, request_data, *args, **kwargs
+        ):
             rid = (
                 request_data.get("_whistledown_request_id")
                 if isinstance(request_data, dict)

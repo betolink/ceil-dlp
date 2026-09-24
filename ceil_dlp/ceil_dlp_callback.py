@@ -50,6 +50,10 @@ else:
 
 
 class _PatchedCeilDLPHandler(CustomLogger):
+    # Streaming output is held back by up to this many characters so a secret
+    # (or pseudonym) split across SSE chunk boundaries is still transformed
+    # before any part of it is emitted. Adds this much tail latency to streams.
+    _MASK_KEEP = 80
 
     def __init__(self, inner: CeilDLPHandler) -> None:
         super().__init__()
@@ -138,7 +142,10 @@ class _PatchedCeilDLPHandler(CustomLogger):
             buf = self._stream_buffers.pop(key, "")
             if not buf:
                 continue
-            replacements = self._get_replacements(request_id)
+            # Never fall back to the union of all cached mappings here: that
+            # would reverse another request's pseudonyms. Only reverse when we
+            # have a real request id.
+            replacements = self._get_replacements(request_id) if request_id else {}
             if replacements:
                 tokens = sorted(replacements.keys(), key=len, reverse=True)
                 pattern = re.compile("|".join(re.escape(t) for t in tokens))
@@ -162,22 +169,46 @@ class _PatchedCeilDLPHandler(CustomLogger):
         except Exception:
             pass
 
-    def _mask_chunk_inplace(self, chunk: Any, model: str) -> None:
-        """Mask model-generated PII in a streaming delta.
+    def transform_streaming_text(
+        self, request_id: str | None, field: str, chunk_text: str, model: str = ""
+    ) -> str:
+        """Mask generated PII and reverse pseudonyms over a sliding window.
 
-        Best-effort: matches are applied per SSE chunk, so a secret split across
-        chunk boundaries may evade masking. Non-streaming responses are exact.
+        Keeps the last ``_MASK_KEEP`` characters buffered so a secret (or
+        pseudonym) split across SSE chunks is transformed before any part of it
+        is emitted. The returned prefix is safe to stream; the residual tail is
+        flushed at end-of-stream.
         """
+        key = f"{request_id or '_fallback'}:{field}"
+        buf = self._stream_buffers.get(key, "") + chunk_text
+        buf = self._inner.mask_response_text(buf, model)
+        # Only reverse with a real request id (never another request's cache).
+        replacements = self._get_replacements(request_id) if request_id else {}
+        if replacements:
+            tokens = sorted(replacements.keys(), key=len, reverse=True)
+            pattern = re.compile("|".join(re.escape(t) for t in tokens))
+            buf = pattern.sub(lambda m: replacements[m.group()], buf)
+        keep_len = min(self._MASK_KEEP, len(buf))
+        self._stream_buffers[key] = buf[len(buf) - keep_len :]
+        return buf[: len(buf) - keep_len]
+
+    def _transform_chunk_inplace(
+        self, chunk: Any, request_id: str | None, model: str
+    ) -> None:
         try:
             for choice in chunk.choices:
                 d = getattr(choice, "delta", None)
                 if d is None:
                     continue
                 if getattr(d, "content", None):
-                    d.content = self._inner.mask_response_text(d.content, model)
+                    d.content = self.transform_streaming_text(
+                        request_id, "content", d.content, model
+                    )
                 rc = getattr(d, "reasoning_content", None)
                 if rc:
-                    d.reasoning_content = self._inner.mask_response_text(rc, model)
+                    d.reasoning_content = self.transform_streaming_text(
+                        request_id, "reasoning", rc, model
+                    )
         except Exception:
             pass
 
@@ -422,9 +453,7 @@ def _ensure_data_generator_patched() -> None:
             try:
                 async for chunk in response:
                     if hasattr(chunk, "choices"):
-                        _instance._mask_chunk_inplace(chunk, stream_model)
-                    if rid and hasattr(chunk, "choices"):
-                        _instance._reverse_chunk_inplace(chunk, rid)
+                        _instance._transform_chunk_inplace(chunk, rid, stream_model)
 
                     chunk = await _ps.proxy_logging_obj.async_post_call_streaming_hook(
                         user_api_key_dict=user_api_key_dict,
@@ -440,17 +469,18 @@ def _ensure_data_generator_patched() -> None:
                     except Exception as e:
                         yield f"data: {str(e)}\n\n"
 
-                # Flush any residual buffered pseudonym text before [DONE]
-                if rid:
-                    leftover = _instance.flush_streaming_buffers(rid)
-                    if leftover:
-                        from litellm.types.utils import Delta, ModelResponse, StreamingChoices
+                # Flush any residual buffered (masked/reversed) text before [DONE].
+                # Always run: the masking buffer is keyed on "_fallback" when the
+                # request has no whistledown id, and its tail must not be lost.
+                leftover = _instance.flush_streaming_buffers(rid)
+                if leftover:
+                    from litellm.types.utils import Delta, ModelResponse, StreamingChoices
 
-                        final = ModelResponse(
-                            id="ceil-dlp-flush",
-                            choices=[StreamingChoices(delta=Delta(content=leftover))],
-                        )
-                        yield f"data: {final.model_dump_json(exclude_none=True, exclude_unset=True)}\n\n"
+                    final = ModelResponse(
+                        id="ceil-dlp-flush",
+                        choices=[StreamingChoices(delta=Delta(content=leftover))],
+                    )
+                    yield f"data: {final.model_dump_json(exclude_none=True, exclude_unset=True)}\n\n"
 
                 yield "data: [DONE]\n\n"
             except Exception as e:
